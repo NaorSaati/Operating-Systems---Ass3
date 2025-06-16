@@ -6,6 +6,12 @@
 #include "spinlock.h"
 #include "proc.h"
 
+
+
+extern uint64 map_shared_pages(struct proc*, struct proc*, uint64, uint64);
+extern uint64 unmap_shared_pages(struct proc*, uint64, uint64);
+extern struct proc proc[NPROC];
+
 uint64
 sys_exit(void)
 {
@@ -88,4 +94,57 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+// ----------------------------------------------------------------------
+// task1:
+uint64
+sys_map_shared_pages(void)
+{
+    int src_pid, dst_pid;
+    uint64 src_va, size;
+    struct proc *src_proc, *dst_proc;
+    
+    // Extract arguments from user space
+    argint(0, &src_pid);
+    argint(1, &dst_pid);
+    argaddr(2, &src_va);
+    argaddr(3, &size);
+    
+    // Find source process by PID
+    src_proc = 0; 
+    dst_proc = 0;
+    for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state != UNUSED) {
+          if(p->pid == src_pid)
+              src_proc = p;
+          if(p->pid == dst_pid)
+              dst_proc = p;
+      }
+      release(&p->lock);
+
+      if(src_proc && dst_proc)
+          break;
+    }
+
+    
+    if(src_proc == 0 || dst_proc == 0) {
+        return -1; // Source process not found
+    }
+    
+    return map_shared_pages(src_proc, dst_proc, src_va, size);
+}
+
+// ----------------------------------------------------------------------
+uint64
+sys_unmap_shared_pages(void)
+{
+  struct proc *curproc = myproc();
+  uint64 addr;
+  int size;
+
+  argaddr(0, &addr);
+  argint(1, &size);
+
+  return unmap_shared_pages(curproc, addr, size);
 }

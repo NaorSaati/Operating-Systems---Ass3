@@ -5,6 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
+
+static void cleanup(struct proc *dst_proc, uint64 dst_va,
+                    uint64 pages_mapped, uint64 original_sz);
 
 /*
  * the kernel's page table.
@@ -183,9 +188,12 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
+    // task1:
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if((*pte & PTE_S) == 0) {
+        kfree((void*)pa);
+      }
     }
     *pte = 0;
   }
@@ -436,4 +444,125 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+
+
+
+// ------------------------------------------------------------------------------
+
+// task1:
+
+uint64 map_shared_pages(struct proc *src_proc, struct proc *dst_proc,
+                        uint64 src_va, uint64 size)
+{
+  if (src_proc == 0 || dst_proc == 0 || size == 0 || src_va >= MAXVA)
+    return -1;
+
+  pte_t *pte_src;
+  uint64 a, last, pa, dst_va, cur_dst_va, offset, org_sz;
+  int flags;
+
+  a = PGROUNDDOWN(src_va);
+  last = PGROUNDDOWN(src_va + size - 1);
+
+  acquire(&dst_proc->lock); 
+  acquire(&src_proc->lock);
+
+  dst_va = PGROUNDUP(dst_proc->sz);
+  org_sz = dst_proc->sz;
+  cur_dst_va = dst_va;
+  offset = src_va - a;
+
+  for (;;)
+  {
+    if ((pte_src = walk(src_proc->pagetable, a, 0)) == 0) {
+      printf("❌ walk failed at va %p\n", a);
+      cleanup(dst_proc, dst_va, ((cur_dst_va - dst_va) / PGSIZE), org_sz);
+      release(&src_proc->lock);
+      release(&dst_proc->lock);
+      return -1;
+    }
+
+    if (!(*pte_src & PTE_V) || !(*pte_src & PTE_U)) {
+      printf("❌ invalid PTE at va %p: flags = 0x%x\n", a, *pte_src);
+      cleanup(dst_proc, dst_va, ((cur_dst_va - dst_va) / PGSIZE), org_sz);
+      release(&src_proc->lock);
+      release(&dst_proc->lock);
+      return -1;
+    }
+
+    pa = PTE2PA(*pte_src);
+    flags = PTE_FLAGS(*pte_src) | PTE_S;
+
+    printf("✅ mapping va %p to pa %p with flags 0x%x\n", cur_dst_va, pa, flags);
+
+    if (mappages(dst_proc->pagetable, cur_dst_va, PGSIZE, pa, flags) != 0) {
+      printf("❌ mappages failed at dst_va %p\n", cur_dst_va);
+      cleanup(dst_proc, dst_va, ((cur_dst_va - dst_va) / PGSIZE), org_sz);
+      release(&src_proc->lock);
+      release(&dst_proc->lock);
+      return -1;
+    }
+
+    dst_proc->sz = cur_dst_va + PGSIZE;
+
+    if (a == last)
+      break;
+    a += PGSIZE;
+    cur_dst_va += PGSIZE;
+  }
+
+  release(&src_proc->lock);
+  release(&dst_proc->lock);
+  return dst_va + offset;
+}
+
+// ------------------------------------------------------------------------------
+
+// Unmap the shared memory from the destination process
+uint64 unmap_shared_pages(struct proc *p, uint64 addr, uint64 size)
+{
+  // validation checks
+  if (p == 0 || size == 0 || addr >= MAXVA)
+  {
+    return -1; // Invalid input
+  }
+  pte_t *pte;
+  uint64 a, last, npages;
+  a = PGROUNDDOWN(addr);
+  last = PGROUNDDOWN(addr + size - 1);
+  npages = (last - a)/PGSIZE + 1;
+
+  // Check if the mapping is exist & shared
+  acquire(&p->lock);
+  for(uint64 curr = a; curr <= last; curr += PGSIZE){
+      if(((pte = walk(p->pagetable, curr, 0)) == 0) || !(*pte & PTE_S) || !(*pte & PTE_V)){
+        release(&p->lock);
+        return -1;
+    }
+  }
+
+  // Unmap
+  uvmunmap(p->pagetable, a, npages, 0);
+
+  // reSize
+  if(a + npages*PGSIZE == p->sz)
+    p->sz = a;
+  release(&p->lock);
+  
+  return 0;
+}
+
+// ------------------------------------------------------------------------------
+
+static void cleanup(struct proc *dst_proc, uint64 dst_va,
+                    uint64 pages_mapped, uint64 original_sz)
+{
+  if (pages_mapped > 0)
+  {
+    uvmunmap(dst_proc->pagetable, dst_va, pages_mapped, 0);
+  }
+  // Restore the original process size
+  dst_proc->sz = original_sz;
 }

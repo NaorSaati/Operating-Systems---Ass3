@@ -681,3 +681,8 @@ procdump(void)
     printf("\n");
   }
 }
+
+// task1:
+int sys_get_sz(void) {
+  return myproc()->sz;
+}

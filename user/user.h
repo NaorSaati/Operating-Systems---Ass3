@@ -39,3 +39,5 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
+int map_shared_pages(uint64 src_pid, uint64 dst_pid, void *addr, uint64 size);
+int unmap_shared_pages(void *addr, uint64 size);

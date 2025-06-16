@@ -1,87 +1,78 @@
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "user/user.h"
-#include "kernel/riscv.h"
 
-void shmem_test(int disable_unmapping)
+#define PGSIZE 4096
+
+int
+main(int argc, char *argv[])
 {
-    char *buffer = malloc(PGSIZE);
-    if (buffer == 0) {
-        printf("❌ Failed to allocate buffer\n");
-        exit(1);
+  char *shared;
+  int child_Pid;
+  int disable_Unmap = 0;
+
+  if (argc > 1 && strcmp(argv[1], "keep") == 0)
+    disable_Unmap = 1;
+
+  char *buf = malloc(PGSIZE);
+  if (buf == 0) {
+    printf("Parent: malloc failed\n");
+    exit(1);
+  }
+
+  void *before_fork_sz = sbrk(0);
+  int parent_pid = getpid();
+
+  child_Pid = fork();
+  if (child_Pid < 0) {
+    printf("fork failed\n");
+    exit(1);
+  }
+
+  if (child_Pid == 0) {
+    // The Children
+    void *before_map_sz = sbrk(0);
+    printf("Child: sz before map: %p\n" ,before_map_sz);
+
+    uint64 addr = map_shared_pages(parent_pid, getpid(), buf, PGSIZE);
+    if (addr == (uint64)-1) {
+      printf("Child: map_shared_pages failed\n");
+      exit(1);
+    }
+    shared = (char *)(uint64)addr;
+
+    printf("Child: wrote message to shared memory\n");
+    strcpy(shared, "Hello daddy");
+
+    void *after_map_sz = sbrk(0);
+    printf("Child: sz after map: %p\n", after_map_sz);
+
+    if (!disable_Unmap) {
+      if (unmap_shared_pages(shared, PGSIZE) != 0) {
+        printf("Child: unmap_shared_pages failed\n");
+      } else {
+        printf("Child: unmapped shared memory\n");
+      }
     }
 
-    strcpy(buffer, "Hello daddy 👋");
+    printf("Child: sz after unmap: %p\n", disable_Unmap ? after_map_sz : sbrk(0));
 
-    int p[2];
-    pipe(p);  // p[0] = read end, p[1] = write end
+    char *test_malloc = malloc(PGSIZE);
+    if (test_malloc)
+      strcpy(test_malloc, "Malloc after unmap");
 
-    int pid = fork();
-    if (pid < 0) {
-        printf("❌ Fork failed\n");
-        free(buffer);
-        exit(1);
-    }
-
-    if (pid == 0) {
-        // 👶 ילד
-        close(p[1]);  // סגור צד כתיבה
-        uint64 mapped_addr;
-        read(p[0], &mapped_addr, sizeof(mapped_addr));
-        close(p[0]);
-
-        sleep(5);  // תן להורה להשלים מיפוי
-        printf("[Child] sbrk before: %d\n", sbrk(0));
-        printf("[Child] shared buffer contains: %s\n", (char *)mapped_addr);
-
-        if (!disable_unmapping) {
-            if (unmap_shared_pages((void *)mapped_addr, PGSIZE) < 0)
-                printf("[Child] ❌ unmap failed\n");
-            else
-                printf("[Child] ✅ unmapped successfully\n");
-            printf("[Child] sbrk after unmap: %d\n", sbrk(0));
-        }
-
-        char *new_buf = malloc(PGSIZE);
-        if (new_buf == 0) {
-            printf("[Child] ❌ malloc after unmap failed\n");
-            exit(1);
-        }
-
-        strcpy(new_buf, "malloc after unmap works!");
-        printf("[Child] new malloc: %s\n", new_buf);
-        printf("[Child] sbrk after malloc: %d\n", sbrk(0));
-        free(new_buf);
-        exit(0);
-    } else {
-        // 👨 אבא
-        close(p[0]);  // סגור צד קריאה
-
-        uint64 mapped = map_shared_pages(getpid(), pid, buffer, PGSIZE);
-        if (mapped == (uint64)-1) {
-            printf("❌ mapping failed\n");
-            free(buffer);
-            wait(0);
-            return;
-        } else {
-            write(p[1], &mapped, sizeof(mapped));
-            close(p[1]);
-            printf("✅ mapping succeeded\n");
-        }
-
-        wait(0);
-        printf("[Parent] read from buffer: %s\n", buffer);
-        free(buffer);
-    }
-}
-
-int main(int argc, char *argv[])
-{
-    printf("\n=== Test with unmap ===\n");
-    shmem_test(0);
-
-    printf("\n=== Test without unmap ===\n");
-    shmem_test(1);
+    void *after_malloc_sz = sbrk(0);
+    printf("Child: sz after malloc: %p\n", after_malloc_sz);
 
     exit(0);
+  }
+
+  // The Parrent
+  wait(0);
+  printf("Parent: read from shared buffer: %s\n", buf);
+
+  void *after_wait_sz = sbrk(0);
+  printf("Parent: sz before: %p, after: %p\n", before_fork_sz, after_wait_sz);
+
+  exit(0);
 }

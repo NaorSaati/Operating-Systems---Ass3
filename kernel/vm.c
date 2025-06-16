@@ -455,7 +455,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 uint64 map_shared_pages(struct proc *src_proc, struct proc *dst_proc,
                         uint64 src_va, uint64 size)
-{
+{ // Maps a physical page from one process to another (share)
   if (src_proc == 0 || dst_proc == 0 || size == 0 || src_va >= MAXVA)
     return -1;
 
@@ -477,7 +477,6 @@ uint64 map_shared_pages(struct proc *src_proc, struct proc *dst_proc,
   for (;;)
   {
     if ((pte_src = walk(src_proc->pagetable, a, 0)) == 0) {
-      printf("❌ walk failed at va %p\n", a);
       cleanup(dst_proc, dst_va, ((cur_dst_va - dst_va) / PGSIZE), org_sz);
       release(&src_proc->lock);
       release(&dst_proc->lock);
@@ -485,7 +484,6 @@ uint64 map_shared_pages(struct proc *src_proc, struct proc *dst_proc,
     }
 
     if (!(*pte_src & PTE_V) || !(*pte_src & PTE_U)) {
-      printf("❌ invalid PTE at va %p: flags = 0x%x\n", a, *pte_src);
       cleanup(dst_proc, dst_va, ((cur_dst_va - dst_va) / PGSIZE), org_sz);
       release(&src_proc->lock);
       release(&dst_proc->lock);
@@ -498,7 +496,6 @@ uint64 map_shared_pages(struct proc *src_proc, struct proc *dst_proc,
     printf("✅ mapping va %p to pa %p with flags 0x%x\n", cur_dst_va, pa, flags);
 
     if (mappages(dst_proc->pagetable, cur_dst_va, PGSIZE, pa, flags) != 0) {
-      printf("❌ mappages failed at dst_va %p\n", cur_dst_va);
       cleanup(dst_proc, dst_va, ((cur_dst_va - dst_va) / PGSIZE), org_sz);
       release(&src_proc->lock);
       release(&dst_proc->lock);
@@ -522,7 +519,7 @@ uint64 map_shared_pages(struct proc *src_proc, struct proc *dst_proc,
 
 // Unmap the shared memory from the destination process
 uint64 unmap_shared_pages(struct proc *p, uint64 addr, uint64 size)
-{
+{ // Removes the mapping from the process that obtained the share.
   // validation checks
   if (p == 0 || size == 0 || addr >= MAXVA)
   {
